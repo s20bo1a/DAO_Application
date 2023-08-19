@@ -63,4 +63,216 @@ contract DominionDAO is ReentrancyGuard, AccessControl {
         string memory description,
         address beneficiary,
         uint256 amount
-    )public stakeholderOnly("Proposal Creation Allowed for Stakeholders only")
+    )public stakeholderOnly("Proposal Creation Allowed for Stakeholders only")                                                                                              
+    //returns (ProposalStruct memory)
+      {
+        uint256 proposalId = totalProposals++;
+        ProposalStruct storage proposal = raisedProposals[proposalId];
+
+        proposal.id = proposalId;
+        proposal.proposer = payable(msg.sender);
+        proposal.title = title;
+        proposal.description = description;
+        proposal.beneficiary = payable(beneficiary);
+        proposal.amount = amount;
+        proposal.duration = block.timestamp + MIN_VOTE_DURATION;
+
+        emit Action(
+            msg.sender,
+            STAKEHOLDER_ROLE,
+            "PROPOSAL RAISED",
+            beneficiary,
+            amount
+        );
+
+        //return proposal;
+    }
+
+    function performVote(uint256 proposalId, bool choosen)
+        external
+        stakeholderOnly("Unauthorized: Stakeholders only")
+        returns (VotedStruct memory)
+    {
+        ProposalStruct storage proposal = raisedProposals[proposalId];
+
+        handleVoting(proposal);
+
+        if (choosen) proposal.upvotes++;
+        else proposal.downvotes++;
+
+        stakeholderVotes[msg.sender].push(proposal.id);
+
+        votedOn[proposal.id].push(
+            VotedStruct(
+                msg.sender,
+                block.timestamp,
+                choosen
+            )
+        );
+
+        emit Action(
+            msg.sender,
+            STAKEHOLDER_ROLE,
+            "PROPOSAL VOTE",
+            proposal.beneficiary,
+            proposal.amount
+        );
+
+        // return VotedStruct(
+          //      msg.sender,
+           //     block.timestamp,
+            //    choosen
+           // );
+    }
+
+    function handleVoting(ProposalStruct storage proposal) private {
+        if (
+            proposal.passed ||
+            proposal.duration <= block.timestamp
+        ) {
+            proposal.passed = true;
+            revert("Proposal duration expired");
+        }
+
+        uint256[] memory tempVotes = stakeholderVotes[msg.sender];
+        for (uint256 votes = 0; votes < tempVotes.length; votes++) {
+            if (proposal.id == tempVotes[votes])
+                revert("Double voting not allowed");
+        }
+    }
+
+    function payBeneficiary(uint256 proposalId)
+        public stakeholderOnly("Unauthorized: Stakeholders only")
+        nonReentrant()
+        // returns (uint256)
+    {
+        ProposalStruct storage proposal = raisedProposals[proposalId];
+        require(daoBalance >= proposal.amount, "Insufficient fund");
+
+        if (proposal.paid) revert("Payment sent before");
+
+        if (proposal.upvotes <= proposal.downvotes)
+            revert("Insufficient votes");
+
+       
+
+        proposal.paid = true;
+        proposal.executor = msg.sender;
+        daoBalance -= proposal.amount;
+
+
+         payTo(proposal.beneficiary, proposal.amount);
+
+        emit Action(
+            msg.sender,
+            STAKEHOLDER_ROLE,
+            "PAYMENT TRANSFERED",
+            proposal.beneficiary,
+            proposal.amount
+        );
+
+       // return daoBalance;
+    }
+
+    function contribute() payable external returns (uint256) {
+        require(msg.value > 0 ether, "Insufficient amount");
+        if (!hasRole(STAKEHOLDER_ROLE, msg.sender)) {
+            uint256 totalContribution = contributors[msg.sender] + msg.value;
+
+            if (totalContribution >= MIN_STAKEHOLDER_CONTRIBUTION) {
+                stakeholders[msg.sender] = totalContribution;
+                contributors[msg.sender] += msg.value;
+                _setupRole(STAKEHOLDER_ROLE, msg.sender);
+                _setupRole(CONTRIBUTOR_ROLE, msg.sender);
+            } else {
+                contributors[msg.sender] += msg.value;
+                _setupRole(CONTRIBUTOR_ROLE, msg.sender);
+            }
+        } else {
+            contributors[msg.sender] += msg.value;
+            stakeholders[msg.sender] += msg.value;
+        }
+        
+        daoBalance += msg.value;
+
+        emit Action(
+            msg.sender,
+            STAKEHOLDER_ROLE,
+            "CONTRIBUTION RECEIVED",
+            address(this),
+            msg.value
+        );
+
+        return daoBalance;
+    }
+
+    function getProposals()public view
+        returns (ProposalStruct[] memory props)
+    {
+        props = new ProposalStruct[](totalProposals);
+
+        for (uint256 i = 0; i < totalProposals; i++) {
+            props[i] = raisedProposals[i];
+        }
+    }
+
+    function getProposal(uint256 proposalId)public 
+        view returns (ProposalStruct memory){
+        return raisedProposals[proposalId];
+    }
+    
+    function getVotesOf(uint256 proposalId)public 
+        view
+        returns (VotedStruct[] memory)
+    {
+        return votedOn[proposalId];
+    }
+
+    function getStakeholderVotes()
+        public
+        view
+        stakeholderOnly("Unauthorized: not a stakeholder")
+        returns (uint256[] memory)
+    {
+        return stakeholderVotes[msg.sender];
+    }
+
+    function getStakeholderBalance()
+        public 
+        view
+        stakeholderOnly("Unauthorized: not a stakeholder")
+        returns (uint256)
+    {
+        return stakeholders[msg.sender];
+    }
+
+    function isStakeholder() public view returns (bool) {
+        return stakeholders[msg.sender] > 0;
+    }
+
+    function getContributorBalance()
+        external
+        view
+        contributorOnly("Denied: User is not a contributor")
+        returns (uint256)
+    {
+        return contributors[msg.sender];
+    }
+
+    function isContributor() external view returns (bool) {
+        return contributors[msg.sender] > 0;
+    }
+
+    function getBalance() external view returns (uint256) {
+        return contributors[msg.sender];
+    }
+
+    function payTo(
+        address to, 
+        uint256 amount
+    ) internal returns (bool) {
+        (bool success,) = payable(to).call{value: amount}("");
+        require(success, "Payment failed");
+        return true;
+    }
+}
